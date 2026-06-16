@@ -70,7 +70,11 @@ function createEmbed() {
   }).join("\n\n");
 
   return new EmbedBuilder()
-    .setTitle(locked ? "Přítomnost v kanceláři OPK – UZAVŘENO" : "Přítomnost v kanceláři OPK")
+    .setTitle(
+      locked
+        ? "Přítomnost v kanceláři OPK – UZAVŘENO"
+        : "Přítomnost v kanceláři OPK"
+    )
     .setDescription(`**Týden ${weekStart} – ${weekEnd}**\n\n${description}`)
     .setFooter({
       text: locked
@@ -89,7 +93,9 @@ function createButtons() {
     row.addComponents(
       new ButtonBuilder()
         .setCustomId(`day_${dayInfo.name}`)
-        .setLabel(`${dayInfo.shortName} ${dayInfo.date} (${attendance[dayInfo.name].length}/${CAPACITY})`)
+        .setLabel(
+          `${dayInfo.shortName} ${dayInfo.date} (${attendance[dayInfo.name].length}/${CAPACITY})`
+        )
         .setStyle(ButtonStyle.Primary)
         .setDisabled(locked || isFull)
     );
@@ -133,10 +139,6 @@ async function lockPoll() {
 
 client.once("ready", async () => {
   console.log(`Bot je přihlášen jako ${client.user.tag}`);
-
-  // TEST: po spuštění hned pošle anketu.
-  // Až vše otestujete, tento řádek smažte nebo zakomentujte:
-  await sendPoll();
 
   // Každý pátek v 8:00
   cron.schedule("0 8 * * 5", sendPoll, {
