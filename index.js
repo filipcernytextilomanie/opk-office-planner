@@ -12,9 +12,11 @@ const client = new Client({
 
 const TOKEN = process.env.DISCORD_TOKEN;
 const CHANNEL_ID = process.env.CHANNEL_ID;
+const OPK_ROLE_ID = process.env.OPK_ROLE_ID || "934064542760189983";
 
 const CAPACITY = 9;
 const DAYS = ["Pondělí", "Úterý", "Středa", "Čtvrtek", "Pátek"];
+const SHORT_DAYS = ["Po", "Út", "St", "Čt", "Pá"];
 
 let attendance = {};
 let pollMessage = null;
@@ -26,37 +28,68 @@ function resetAttendance() {
   locked = false;
 }
 
+function getNextWeekDays() {
+  const today = new Date();
+  const day = today.getDay();
+
+  const daysUntilNextMonday = ((8 - day) % 7) || 7;
+
+  const monday = new Date(today);
+  monday.setDate(today.getDate() + daysUntilNextMonday);
+
+  return DAYS.map((dayName, index) => {
+    const date = new Date(monday);
+    date.setDate(monday.getDate() + index);
+
+    return {
+      name: dayName,
+      shortName: SHORT_DAYS[index],
+      date: date.toLocaleDateString("cs-CZ", {
+        day: "2-digit",
+        month: "2-digit",
+        year: "numeric"
+      })
+    };
+  });
+}
+
 function createEmbed() {
-  const description = DAYS.map(day => {
-    const people = attendance[day];
+  const nextWeekDays = getNextWeekDays();
+
+  const weekStart = nextWeekDays[0].date;
+  const weekEnd = nextWeekDays[4].date;
+
+  const description = nextWeekDays.map(dayInfo => {
+    const people = attendance[dayInfo.name];
 
     const list = people.length
       ? people.map(id => `• <@${id}>`).join("\n")
       : "_Nikdo přihlášen_";
 
-    return `**${day} (${people.length}/${CAPACITY})**\n${list}`;
+    return `**${dayInfo.shortName} ${dayInfo.date} (${people.length}/${CAPACITY})**\n${list}`;
   }).join("\n\n");
 
   return new EmbedBuilder()
     .setTitle(locked ? "Přítomnost v kanceláři OPK – UZAVŘENO" : "Přítomnost v kanceláři OPK")
-    .setDescription(description)
+    .setDescription(`**Týden ${weekStart} – ${weekEnd}**\n\n${description}`)
     .setFooter({
       text: locked
         ? "Hlasování je uzamčeno. Výsledky zůstávají viditelné."
-        : "Kliknutím na den se přihlásíte nebo odhlásíte."
+        : "Anketa je otevřená v pátek od 8:00 do 16:00. Kliknutím na den se přihlásíte nebo odhlásíte."
     });
 }
 
 function createButtons() {
   const row = new ActionRowBuilder();
+  const nextWeekDays = getNextWeekDays();
 
-  DAYS.forEach(day => {
-    const isFull = attendance[day].length >= CAPACITY;
+  nextWeekDays.forEach(dayInfo => {
+    const isFull = attendance[dayInfo.name].length >= CAPACITY;
 
     row.addComponents(
       new ButtonBuilder()
-        .setCustomId(`day_${day}`)
-        .setLabel(`${day} (${attendance[day].length}/${CAPACITY})`)
+        .setCustomId(`day_${dayInfo.name}`)
+        .setLabel(`${dayInfo.shortName} ${dayInfo.date} (${attendance[dayInfo.name].length}/${CAPACITY})`)
         .setStyle(ButtonStyle.Primary)
         .setDisabled(locked || isFull)
     );
@@ -71,8 +104,12 @@ async function sendPoll() {
   const channel = await client.channels.fetch(CHANNEL_ID);
 
   pollMessage = await channel.send({
+    content: `<@&${OPK_ROLE_ID}> 📅 Prosím vyplňte přítomnost v kanceláři na příští týden.`,
     embeds: [createEmbed()],
-    components: createButtons()
+    components: createButtons(),
+    allowedMentions: {
+      roles: [OPK_ROLE_ID]
+    }
   });
 
   console.log("Anketa byla odeslána.");
@@ -97,7 +134,8 @@ async function lockPoll() {
 client.once("ready", async () => {
   console.log(`Bot je přihlášen jako ${client.user.tag}`);
 
-  // TEST - po spuštění hned pošle anketu
+  // TEST: po spuštění hned pošle anketu.
+  // Až vše otestujete, tento řádek smažte nebo zakomentujte:
   await sendPoll();
 
   // Každý pátek v 8:00
