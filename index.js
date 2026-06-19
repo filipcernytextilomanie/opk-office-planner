@@ -100,8 +100,10 @@ function createButtons() {
   return [row];
 }
 
-async function sendPoll() {
-  resetAttendance();
+async function sendPoll(reset = true) {
+  if (reset) {
+    resetAttendance();
+  }
 
   const channel = await client.channels.fetch(CHANNEL_ID);
 
@@ -140,12 +142,16 @@ client.once("ready", async () => {
     {
       name: "anketa",
       description: "Ručně vytvoří novou anketu přítomnosti v kanceláři OPK."
+    },
+    {
+      name: "uzavrit",
+      description: "Ručně uzavře aktuální anketu přítomnosti v kanceláři OPK."
     }
   ]);
 
-  console.log("Příkaz /anketa byl zaregistrován.");
+  console.log("Příkazy /anketa a /uzavrit byly zaregistrovány.");
 
-  cron.schedule("0 8 * * 5", sendPoll, {
+  cron.schedule("0 8 * * 5", () => sendPoll(true), {
     timezone: "Europe/Prague"
   });
 
@@ -163,10 +169,24 @@ client.on("interactionCreate", async interaction => {
           ephemeral: true
         });
 
-        await sendPoll();
+        resetAttendance();
+        await sendPoll(false);
 
         await interaction.editReply({
-          content: "Nová anketa byla vytvořena."
+          content: "Nová anketa byla vytvořena. Předchozí zprávy v kanálu zůstaly zachované."
+        });
+      }
+
+      if (interaction.commandName === "uzavrit") {
+        await interaction.reply({
+          content: "Uzavírám aktuální anketu...",
+          ephemeral: true
+        });
+
+        await lockPoll();
+
+        await interaction.editReply({
+          content: "Aktuální anketa byla uzavřena."
         });
       }
 
