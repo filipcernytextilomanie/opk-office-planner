@@ -136,6 +136,15 @@ async function lockPoll() {
 client.once("ready", async () => {
   console.log(`Bot je přihlášen jako ${client.user.tag}`);
 
+  await client.application.commands.set([
+    {
+      name: "anketa",
+      description: "Ručně vytvoří novou anketu přítomnosti v kanceláři OPK."
+    }
+  ]);
+
+  console.log("Příkaz /anketa byl zaregistrován.");
+
   cron.schedule("0 8 * * 5", sendPoll, {
     timezone: "Europe/Prague"
   });
@@ -147,6 +156,23 @@ client.once("ready", async () => {
 
 client.on("interactionCreate", async interaction => {
   try {
+    if (interaction.isChatInputCommand()) {
+      if (interaction.commandName === "anketa") {
+        await interaction.reply({
+          content: "Vytvářím novou anketu...",
+          ephemeral: true
+        });
+
+        await sendPoll();
+
+        await interaction.editReply({
+          content: "Nová anketa byla vytvořena."
+        });
+      }
+
+      return;
+    }
+
     if (!interaction.isButton()) return;
 
     if (locked) {
@@ -187,7 +213,7 @@ client.on("interactionCreate", async interaction => {
       components: createButtons()
     });
   } catch (error) {
-    console.error("Chyba při kliknutí na tlačítko:", error);
+    console.error("Chyba při interakci:", error);
   }
 });
 
