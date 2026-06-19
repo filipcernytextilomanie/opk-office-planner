@@ -31,7 +31,6 @@ function resetAttendance() {
 function getNextWeekDays() {
   const today = new Date();
   const day = today.getDay();
-
   const daysUntilNextMonday = ((8 - day) % 7) || 7;
 
   const monday = new Date(today);
@@ -55,11 +54,12 @@ function getNextWeekDays() {
 
 function createEmbed() {
   const nextWeekDays = getNextWeekDays();
-
   const weekStart = nextWeekDays[0].date;
   const weekEnd = nextWeekDays[4].date;
 
   const description = nextWeekDays.map(dayInfo => {
+    if (!attendance[dayInfo.name]) attendance[dayInfo.name] = [];
+
     const people = attendance[dayInfo.name];
 
     const list = people.length
@@ -70,11 +70,7 @@ function createEmbed() {
   }).join("\n\n");
 
   return new EmbedBuilder()
-    .setTitle(
-      locked
-        ? "Přítomnost v kanceláři OPK – UZAVŘENO"
-        : "Přítomnost v kanceláři OPK"
-    )
+    .setTitle(locked ? "Přítomnost v kanceláři OPK – UZAVŘENO" : "Přítomnost v kanceláři OPK")
     .setDescription(`**Týden ${weekStart} – ${weekEnd}**\n\n${description}`)
     .setFooter({
       text: locked
@@ -88,14 +84,14 @@ function createButtons() {
   const nextWeekDays = getNextWeekDays();
 
   nextWeekDays.forEach(dayInfo => {
+    if (!attendance[dayInfo.name]) attendance[dayInfo.name] = [];
+
     const isFull = attendance[dayInfo.name].length >= CAPACITY;
 
     row.addComponents(
       new ButtonBuilder()
         .setCustomId(`day_${dayInfo.name}`)
-        .setLabel(
-          `${dayInfo.shortName} ${dayInfo.date} (${attendance[dayInfo.name].length}/${CAPACITY})`
-        )
+        .setLabel(`${dayInfo.shortName} ${dayInfo.date} (${attendance[dayInfo.name].length}/${CAPACITY})`)
         .setStyle(ButtonStyle.Primary)
         .setDisabled(locked || isFull)
     );
@@ -140,53 +136,67 @@ async function lockPoll() {
 client.once("ready", async () => {
   console.log(`Bot je přihlášen jako ${client.user.tag}`);
 
-  // Každý pátek v 8:00
   cron.schedule("0 8 * * 5", sendPoll, {
     timezone: "Europe/Prague"
   });
 
-  // Každý pátek v 16:00
   cron.schedule("0 16 * * 5", lockPoll, {
     timezone: "Europe/Prague"
   });
 });
 
 client.on("interactionCreate", async interaction => {
-  if (!interaction.isButton()) return;
+  try {
+    if (!interaction.isButton()) return;
 
-  if (locked) {
-    await interaction.reply({
-      content: "Hlasování už je uzamčeno.",
-      ephemeral: true
-    });
-    return;
-  }
-
-  const day = interaction.customId.replace("day_", "");
-  const userId = interaction.user.id;
-
-  if (!DAYS.includes(day)) return;
-
-  const people = attendance[day];
-
-  if (people.includes(userId)) {
-    attendance[day] = people.filter(id => id !== userId);
-  } else {
-    if (people.length >= CAPACITY) {
+    if (locked) {
       await interaction.reply({
-        content: `${day} už má plnou kapacitu.`,
+        content: "Hlasování už je uzamčeno.",
         ephemeral: true
       });
       return;
     }
 
-    attendance[day].push(userId);
-  }
+    const day = interaction.customId.replace("day_", "");
+    const userId = interaction.user.id;
 
-  await interaction.update({
-    embeds: [createEmbed()],
-    components: createButtons()
-  });
+    if (!DAYS.includes(day)) return;
+
+    if (!attendance[day]) {
+      attendance[day] = [];
+    }
+
+    const people = attendance[day];
+
+    if (people.includes(userId)) {
+      attendance[day] = people.filter(id => id !== userId);
+    } else {
+      if (people.length >= CAPACITY) {
+        await interaction.reply({
+          content: `${day} už má plnou kapacitu.`,
+          ephemeral: true
+        });
+        return;
+      }
+
+      attendance[day].push(userId);
+    }
+
+    await interaction.update({
+      embeds: [createEmbed()],
+      components: createButtons()
+    });
+  } catch (error) {
+    console.error("Chyba při kliknutí na tlačítko:", error);
+  }
+});
+
+client.on("error", error => {
+  console.error("Chyba klienta:", error);
+});
+
+process.on("unhandledRejection", error => {
+  console.error("Neošetřená chyba:", error);
 });
 
 client.login(TOKEN);
