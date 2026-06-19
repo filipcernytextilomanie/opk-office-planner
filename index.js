@@ -136,8 +136,6 @@ async function lockPoll() {
 client.once("ready", async () => {
   console.log(`Bot je přihlášen jako ${client.user.tag}`);
 
-  await sendPoll();
-
   cron.schedule("0 8 * * 5", sendPoll, {
     timezone: "Europe/Prague"
   });
