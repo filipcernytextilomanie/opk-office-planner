@@ -56,16 +56,19 @@ function parseAttendanceFromEmbed(embed) {
   if (!embed || !embed.description) return attendance;
 
   DAYS.forEach(day => {
-    const regex = new RegExp(`\\*\\*[^\\n]*\\*\\*\\n([\\s\\S]*?)(?=\\n\\n\\*\\*|$)`, "g");
-    let match;
+    const index = DAYS.indexOf(day);
+    const shortDay = SHORT_DAYS[index];
 
-    while ((match = regex.exec(embed.description)) !== null) {
-      const section = match[0];
+    const regex = new RegExp(
+      `\\*\\*${day} / ${shortDay} [^\\n]*\\*\\*\\n([\\s\\S]*?)(?=\\n\\n\\*\\*|$)`,
+      "m"
+    );
 
-      if (section.includes(day) || section.includes(SHORT_DAYS[DAYS.indexOf(day)])) {
-        const ids = [...section.matchAll(/<@(\d+)>/g)].map(m => m[1]);
-        attendance[day] = ids;
-      }
+    const match = embed.description.match(regex);
+
+    if (match && match[1]) {
+      const ids = [...match[1].matchAll(/<@!?(\d+)>/g)].map(m => m[1]);
+      attendance[day] = ids;
     }
   });
 
@@ -212,16 +215,14 @@ client.on("interactionCreate", async interaction => {
 
     if (!interaction.isButton()) return;
 
+    await interaction.deferUpdate();
+
     const message = interaction.message;
     const embed = message.embeds[0];
 
     const isLocked = embed?.title?.includes("UZAVŘENO");
 
     if (isLocked) {
-      await interaction.reply({
-        content: "Hlasování už je uzamčeno.",
-        ephemeral: true
-      });
       return;
     }
 
@@ -242,29 +243,18 @@ client.on("interactionCreate", async interaction => {
       attendance[day] = people.filter(id => id !== userId);
     } else {
       if (people.length >= CAPACITY) {
-        await interaction.reply({
-          content: `${day} už má plnou kapacitu.`,
-          ephemeral: true
-        });
         return;
       }
 
       attendance[day].push(userId);
     }
 
-    await interaction.update({
+    await message.edit({
       embeds: [createEmbed(attendance, false)],
       components: createButtons(attendance, false)
     });
   } catch (error) {
     console.error("Chyba při interakci:", error);
-
-    if (!interaction.replied && !interaction.deferred) {
-      await interaction.reply({
-        content: "Něco se pokazilo, zkuste to prosím znovu.",
-        ephemeral: true
-      });
-    }
   }
 });
 
