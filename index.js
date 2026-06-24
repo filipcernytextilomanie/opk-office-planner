@@ -18,15 +18,7 @@ const CAPACITY = 9;
 const DAYS = ["Pondělí", "Úterý", "Středa", "Čtvrtek", "Pátek"];
 const SHORT_DAYS = ["Po", "Út", "St", "Čt", "Pá"];
 
-let attendance = {};
-let pollMessage = null;
-let locked = false;
-
-function resetAttendance() {
-  attendance = {};
-  DAYS.forEach(day => attendance[day] = []);
-  locked = false;
-}
+let lastPollMessageId = null;
 
 function getNextWeekDays() {
   const today = new Date();
@@ -52,21 +44,47 @@ function getNextWeekDays() {
   });
 }
 
-function createEmbed() {
+function createEmptyAttendance() {
+  const attendance = {};
+  DAYS.forEach(day => attendance[day] = []);
+  return attendance;
+}
+
+function parseAttendanceFromEmbed(embed) {
+  const attendance = createEmptyAttendance();
+
+  if (!embed || !embed.description) return attendance;
+
+  DAYS.forEach(day => {
+    const regex = new RegExp(`\\*\\*[^\\n]*\\*\\*\\n([\\s\\S]*?)(?=\\n\\n\\*\\*|$)`, "g");
+    let match;
+
+    while ((match = regex.exec(embed.description)) !== null) {
+      const section = match[0];
+
+      if (section.includes(day) || section.includes(SHORT_DAYS[DAYS.indexOf(day)])) {
+        const ids = [...section.matchAll(/<@(\d+)>/g)].map(m => m[1]);
+        attendance[day] = ids;
+      }
+    }
+  });
+
+  return attendance;
+}
+
+function createEmbed(attendance, locked = false) {
   const nextWeekDays = getNextWeekDays();
   const weekStart = nextWeekDays[0].date;
   const weekEnd = nextWeekDays[4].date;
 
   const description = nextWeekDays.map(dayInfo => {
-    if (!attendance[dayInfo.name]) attendance[dayInfo.name] = [];
-
-    const people = attendance[dayInfo.name];
+    const people = attendance[dayInfo.name] || [];
 
     const list = people.length
       ? people.map(id => `• <@${id}>`).join("\n")
       : "_Nikdo přihlášen_";
 
-    return `**${dayInfo.shortName} ${dayInfo.date} (${people.length}/${CAPACITY})**\n${list}`;
+    return `**${dayInfo.name} / ${dayInfo.shortName} ${dayInfo.date} (${people.length}/${CAPACITY})**\n${list}`;
   }).join("\n\n");
 
   return new EmbedBuilder()
@@ -79,19 +97,18 @@ function createEmbed() {
     });
 }
 
-function createButtons() {
+function createButtons(attendance, locked = false) {
   const row = new ActionRowBuilder();
   const nextWeekDays = getNextWeekDays();
 
   nextWeekDays.forEach(dayInfo => {
-    if (!attendance[dayInfo.name]) attendance[dayInfo.name] = [];
-
-    const isFull = attendance[dayInfo.name].length >= CAPACITY;
+    const people = attendance[dayInfo.name] || [];
+    const isFull = people.length >= CAPACITY;
 
     row.addComponents(
       new ButtonBuilder()
         .setCustomId(`day_${dayInfo.name}`)
-        .setLabel(`${dayInfo.shortName} ${dayInfo.date} (${attendance[dayInfo.name].length}/${CAPACITY})`)
+        .setLabel(`${dayInfo.shortName} ${dayInfo.date} (${people.length}/${CAPACITY})`)
         .setStyle(ButtonStyle.Primary)
         .setDisabled(locked || isFull)
     );
@@ -100,36 +117,37 @@ function createButtons() {
   return [row];
 }
 
-async function sendPoll(reset = true) {
-  if (reset) {
-    resetAttendance();
-  }
-
+async function sendPoll() {
+  const attendance = createEmptyAttendance();
   const channel = await client.channels.fetch(CHANNEL_ID);
 
-  pollMessage = await channel.send({
+  const message = await channel.send({
     content: `<@&${OPK_ROLE_ID}> 📅 Prosím vyplňte přítomnost v kanceláři na příští týden.`,
-    embeds: [createEmbed()],
-    components: createButtons(),
+    embeds: [createEmbed(attendance, false)],
+    components: createButtons(attendance, false),
     allowedMentions: {
       roles: [OPK_ROLE_ID]
     }
   });
 
+  lastPollMessageId = message.id;
   console.log("Anketa byla odeslána.");
 }
 
 async function lockPoll() {
-  if (!pollMessage) {
-    console.log("Není co uzamknout.");
+  if (!lastPollMessageId) {
+    console.log("Není uložená žádná aktuální anketa k uzamčení.");
     return;
   }
 
-  locked = true;
+  const channel = await client.channels.fetch(CHANNEL_ID);
+  const message = await channel.messages.fetch(lastPollMessageId);
 
-  await pollMessage.edit({
-    embeds: [createEmbed()],
-    components: createButtons()
+  const attendance = parseAttendanceFromEmbed(message.embeds[0]);
+
+  await message.edit({
+    embeds: [createEmbed(attendance, true)],
+    components: createButtons(attendance, true)
   });
 
   console.log("Anketa byla uzamčena.");
@@ -145,13 +163,13 @@ client.once("ready", async () => {
     },
     {
       name: "uzavrit",
-      description: "Ručně uzavře aktuální anketu přítomnosti v kanceláři OPK."
+      description: "Ručně uzavře poslední vytvořenou anketu OPK."
     }
   ]);
 
   console.log("Příkazy /anketa a /uzavrit byly zaregistrovány.");
 
-  cron.schedule("0 8 * * 5", () => sendPoll(true), {
+  cron.schedule("0 8 * * 5", sendPoll, {
     timezone: "Europe/Prague"
   });
 
@@ -169,24 +187,23 @@ client.on("interactionCreate", async interaction => {
           ephemeral: true
         });
 
-        resetAttendance();
-        await sendPoll(false);
+        await sendPoll();
 
         await interaction.editReply({
-          content: "Nová anketa byla vytvořena. Předchozí zprávy v kanálu zůstaly zachované."
+          content: "Nová anketa byla vytvořena."
         });
       }
 
       if (interaction.commandName === "uzavrit") {
         await interaction.reply({
-          content: "Uzavírám aktuální anketu...",
+          content: "Uzavírám poslední vytvořenou anketu...",
           ephemeral: true
         });
 
         await lockPoll();
 
         await interaction.editReply({
-          content: "Aktuální anketa byla uzavřena."
+          content: "Anketa byla uzavřena."
         });
       }
 
@@ -195,7 +212,12 @@ client.on("interactionCreate", async interaction => {
 
     if (!interaction.isButton()) return;
 
-    if (locked) {
+    const message = interaction.message;
+    const embed = message.embeds[0];
+
+    const isLocked = embed?.title?.includes("UZAVŘENO");
+
+    if (isLocked) {
       await interaction.reply({
         content: "Hlasování už je uzamčeno.",
         ephemeral: true
@@ -207,6 +229,8 @@ client.on("interactionCreate", async interaction => {
     const userId = interaction.user.id;
 
     if (!DAYS.includes(day)) return;
+
+    const attendance = parseAttendanceFromEmbed(embed);
 
     if (!attendance[day]) {
       attendance[day] = [];
@@ -229,11 +253,18 @@ client.on("interactionCreate", async interaction => {
     }
 
     await interaction.update({
-      embeds: [createEmbed()],
-      components: createButtons()
+      embeds: [createEmbed(attendance, false)],
+      components: createButtons(attendance, false)
     });
   } catch (error) {
     console.error("Chyba při interakci:", error);
+
+    if (!interaction.replied && !interaction.deferred) {
+      await interaction.reply({
+        content: "Něco se pokazilo, zkuste to prosím znovu.",
+        ephemeral: true
+      });
+    }
   }
 });
 
