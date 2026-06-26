@@ -1,10 +1,26 @@
-const { Client, GatewayIntentBits, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require("discord.js");
+const {
+  Client,
+  GatewayIntentBits,
+  EmbedBuilder,
+  ActionRowBuilder,
+  ButtonBuilder,
+  ButtonStyle
+} = require("discord.js");
+
 const cron = require("node-cron");
 const express = require("express");
+const fs = require("fs");
+const path = require("path");
 
 const app = express();
-app.get("/", (req, res) => res.send("OPK bot běží."));
-app.listen(process.env.PORT || 3000, () => console.log("Web server běží."));
+
+app.get("/", (req, res) => {
+  res.send("OPK bot běží.");
+});
+
+app.listen(process.env.PORT || 3000, () => {
+  console.log("Web server běží.");
+});
 
 const client = new Client({
   intents: [GatewayIntentBits.Guilds]
@@ -18,7 +34,30 @@ const CAPACITY = 9;
 const DAYS = ["Pondělí", "Úterý", "Středa", "Čtvrtek", "Pátek"];
 const SHORT_DAYS = ["Po", "Út", "St", "Čt", "Pá"];
 
-let lastPollMessageId = null;
+const DATA_FILE = path.join(__dirname, "data.json");
+
+function loadData() {
+  try {
+    if (!fs.existsSync(DATA_FILE)) {
+      return {
+        currentPollMessageId: null,
+        polls: {}
+      };
+    }
+
+    return JSON.parse(fs.readFileSync(DATA_FILE, "utf8"));
+  } catch (error) {
+    console.error("Chyba při načítání data.json:", error);
+    return {
+      currentPollMessageId: null,
+      polls: {}
+    };
+  }
+}
+
+function saveData(data) {
+  fs.writeFileSync(DATA_FILE, JSON.stringify(data, null, 2), "utf8");
+}
 
 function getNextWeekDays() {
   const today = new Date();
@@ -46,42 +85,32 @@ function getNextWeekDays() {
 
 function createEmptyAttendance() {
   const attendance = {};
-  DAYS.forEach(day => attendance[day] = []);
+  DAYS.forEach(day => {
+    attendance[day] = [];
+  });
   return attendance;
 }
 
-function parseAttendanceFromEmbed(embed) {
-  const attendance = createEmptyAttendance();
-
-  if (!embed || !embed.description) return attendance;
+function normalizeAttendance(attendance) {
+  const normalized = createEmptyAttendance();
 
   DAYS.forEach(day => {
-    const index = DAYS.indexOf(day);
-    const shortDay = SHORT_DAYS[index];
-
-    const regex = new RegExp(
-      `\\*\\*${day} / ${shortDay} [^\\n]*\\*\\*\\n([\\s\\S]*?)(?=\\n\\n\\*\\*|$)`,
-      "m"
-    );
-
-    const match = embed.description.match(regex);
-
-    if (match && match[1]) {
-      const ids = [...match[1].matchAll(/<@!?(\d+)>/g)].map(m => m[1]);
-      attendance[day] = ids;
+    if (Array.isArray(attendance?.[day])) {
+      normalized[day] = [...new Set(attendance[day])];
     }
   });
 
-  return attendance;
+  return normalized;
 }
 
-function createEmbed(attendance, locked = false) {
-  const nextWeekDays = getNextWeekDays();
-  const weekStart = nextWeekDays[0].date;
-  const weekEnd = nextWeekDays[4].date;
+function createEmbed(poll) {
+  poll.attendance = normalizeAttendance(poll.attendance);
 
-  const description = nextWeekDays.map(dayInfo => {
-    const people = attendance[dayInfo.name] || [];
+  const weekStart = poll.days[0].date;
+  const weekEnd = poll.days[4].date;
+
+  const description = poll.days.map(dayInfo => {
+    const people = poll.attendance[dayInfo.name] || [];
 
     const list = people.length
       ? people.map(id => `• <@${id}>`).join("\n")
@@ -91,21 +120,26 @@ function createEmbed(attendance, locked = false) {
   }).join("\n\n");
 
   return new EmbedBuilder()
-    .setTitle(locked ? "Přítomnost v kanceláři OPK – UZAVŘENO" : "Přítomnost v kanceláři OPK")
+    .setTitle(
+      poll.locked
+        ? "Přítomnost v kanceláři OPK – UZAVŘENO"
+        : "Přítomnost v kanceláři OPK"
+    )
     .setDescription(`**Týden ${weekStart} – ${weekEnd}**\n\n${description}`)
     .setFooter({
-      text: locked
+      text: poll.locked
         ? "Hlasování je uzamčeno. Výsledky zůstávají viditelné."
         : "Anketa je otevřená v pátek od 8:00 do 16:00. Kliknutím na den se přihlásíte nebo odhlásíte."
     });
 }
 
-function createButtons(attendance, locked = false) {
-  const row = new ActionRowBuilder();
-  const nextWeekDays = getNextWeekDays();
+function createButtons(poll) {
+  poll.attendance = normalizeAttendance(poll.attendance);
 
-  nextWeekDays.forEach(dayInfo => {
-    const people = attendance[dayInfo.name] || [];
+  const row = new ActionRowBuilder();
+
+  poll.days.forEach(dayInfo => {
+    const people = poll.attendance[dayInfo.name] || [];
     const isFull = people.length >= CAPACITY;
 
     row.addComponents(
@@ -113,7 +147,7 @@ function createButtons(attendance, locked = false) {
         .setCustomId(`day_${dayInfo.name}`)
         .setLabel(`${dayInfo.shortName} ${dayInfo.date} (${people.length}/${CAPACITY})`)
         .setStyle(ButtonStyle.Primary)
-        .setDisabled(locked || isFull)
+        .setDisabled(poll.locked || isFull)
     );
   });
 
@@ -121,37 +155,55 @@ function createButtons(attendance, locked = false) {
 }
 
 async function sendPoll() {
-  const attendance = createEmptyAttendance();
+  const data = loadData();
+
+  const poll = {
+    locked: false,
+    days: getNextWeekDays(),
+    attendance: createEmptyAttendance()
+  };
+
   const channel = await client.channels.fetch(CHANNEL_ID);
 
   const message = await channel.send({
     content: `<@&${OPK_ROLE_ID}> 📅 Prosím vyplňte přítomnost v kanceláři na příští týden.`,
-    embeds: [createEmbed(attendance, false)],
-    components: createButtons(attendance, false),
+    embeds: [createEmbed(poll)],
+    components: createButtons(poll),
     allowedMentions: {
       roles: [OPK_ROLE_ID]
     }
   });
 
-  lastPollMessageId = message.id;
-  console.log("Anketa byla odeslána.");
+  data.currentPollMessageId = message.id;
+  data.polls[message.id] = poll;
+  saveData(data);
+
+  console.log(`Anketa byla odeslána. Message ID: ${message.id}`);
 }
 
 async function lockPoll() {
-  if (!lastPollMessageId) {
+  const data = loadData();
+  const messageId = data.currentPollMessageId;
+
+  if (!messageId || !data.polls[messageId]) {
     console.log("Není uložená žádná aktuální anketa k uzamčení.");
     return;
   }
 
-  const channel = await client.channels.fetch(CHANNEL_ID);
-  const message = await channel.messages.fetch(lastPollMessageId);
+  const poll = data.polls[messageId];
+  poll.attendance = normalizeAttendance(poll.attendance);
+  poll.locked = true;
 
-  const attendance = parseAttendanceFromEmbed(message.embeds[0]);
+  const channel = await client.channels.fetch(CHANNEL_ID);
+  const message = await channel.messages.fetch(messageId);
 
   await message.edit({
-    embeds: [createEmbed(attendance, true)],
-    components: createButtons(attendance, true)
+    embeds: [createEmbed(poll)],
+    components: createButtons(poll)
   });
+
+  data.polls[messageId] = poll;
+  saveData(data);
 
   console.log("Anketa byla uzamčena.");
 }
@@ -195,6 +247,8 @@ client.on("interactionCreate", async interaction => {
         await interaction.editReply({
           content: "Nová anketa byla vytvořena."
         });
+
+        return;
       }
 
       if (interaction.commandName === "uzavrit") {
@@ -208,50 +262,55 @@ client.on("interactionCreate", async interaction => {
         await interaction.editReply({
           content: "Anketa byla uzavřena."
         });
-      }
 
-      return;
+        return;
+      }
     }
 
     if (!interaction.isButton()) return;
 
     await interaction.deferUpdate();
 
-    const message = interaction.message;
-    const embed = message.embeds[0];
+    const data = loadData();
+    const messageId = interaction.message.id;
 
-    const isLocked = embed?.title?.includes("UZAVŘENO");
+    if (!data.polls[messageId]) {
+      console.log(`Pro tuto anketu neexistují uložená data. Message ID: ${messageId}`);
+      return;
+    }
 
-    if (isLocked) {
+    const poll = data.polls[messageId];
+    poll.attendance = normalizeAttendance(poll.attendance);
+
+    if (poll.locked) {
       return;
     }
 
     const day = interaction.customId.replace("day_", "");
     const userId = interaction.user.id;
 
-    if (!DAYS.includes(day)) return;
-
-    const attendance = parseAttendanceFromEmbed(embed);
-
-    if (!attendance[day]) {
-      attendance[day] = [];
+    if (!DAYS.includes(day)) {
+      return;
     }
 
-    const people = attendance[day];
+    const people = poll.attendance[day] || [];
 
     if (people.includes(userId)) {
-      attendance[day] = people.filter(id => id !== userId);
+      poll.attendance[day] = people.filter(id => id !== userId);
     } else {
       if (people.length >= CAPACITY) {
         return;
       }
 
-      attendance[day].push(userId);
+      poll.attendance[day] = [...people, userId];
     }
 
-    await message.edit({
-      embeds: [createEmbed(attendance, false)],
-      components: createButtons(attendance, false)
+    data.polls[messageId] = poll;
+    saveData(data);
+
+    await interaction.message.edit({
+      embeds: [createEmbed(poll)],
+      components: createButtons(poll)
     });
   } catch (error) {
     console.error("Chyba při interakci:", error);
