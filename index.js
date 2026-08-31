@@ -557,5 +557,22 @@ async function loginWithTimeout() {
     console.error("================================");
   }
 }
+async function testDiscordGateway() {
+  try {
+    console.log("TEST: Zkouším Discord Gateway HTTP endpoint...");
 
+    const response = await fetch("https://discord.com/api/v10/gateway");
+
+    console.log("TEST: Gateway HTTP status:", response.status);
+
+    const data = await response.json();
+
+    console.log("TEST: Gateway URL:", data.url);
+  } catch (error) {
+    console.error("TEST: Discord Gateway HTTP SELHAL:");
+    console.error(error);
+  }
+}
+
+testDiscordGateway();
 loginWithTimeout();
