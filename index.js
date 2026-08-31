@@ -4,12 +4,17 @@ const {
   EmbedBuilder,
   ActionRowBuilder,
   ButtonBuilder,
-  ButtonStyle
+  ButtonStyle,
+  Events
 } = require("discord.js");
 
 const express = require("express");
 const fs = require("fs");
 const path = require("path");
+
+// =====================================================
+// ZÁKLADNÍ NASTAVENÍ
+// =====================================================
 
 const app = express();
 
@@ -19,7 +24,7 @@ const client = new Client({
 
 const TOKEN = process.env.DISCORD_TOKEN;
 const CHANNEL_ID = process.env.CHANNEL_ID;
-const OPK_ROLE_ID = process.env.OPK_ROLE_ID || "934064542760189983";
+const OPK_ROLE_ID = process.env.OPK_ROLE_ID;
 const SCHEDULER_KEY = process.env.SCHEDULER_KEY;
 
 const CAPACITY = 9;
@@ -44,21 +49,63 @@ const DATA_FILE = path.join(__dirname, "data.json");
 
 
 // =====================================================
+// KONTROLA ENVIRONMENT VARIABLES
+// =====================================================
+
+console.log("Kontroluji Environment Variables...");
+
+console.log(
+  "DISCORD_TOKEN:",
+  TOKEN ? "NASTAVEN" : "CHYBÍ"
+);
+
+console.log(
+  "CHANNEL_ID:",
+  CHANNEL_ID ? "NASTAVEN" : "CHYBÍ"
+);
+
+console.log(
+  "OPK_ROLE_ID:",
+  OPK_ROLE_ID ? "NASTAVEN" : "CHYBÍ"
+);
+
+console.log(
+  "SCHEDULER_KEY:",
+  SCHEDULER_KEY ? "NASTAVEN" : "CHYBÍ"
+);
+
+
+// =====================================================
 // DATA
 // =====================================================
+
+function createDefaultData() {
+  return {
+    currentPollMessageId: null,
+    polls: {}
+  };
+}
+
 
 function loadData() {
   try {
     if (!fs.existsSync(DATA_FILE)) {
-      return {
-        currentPollMessageId: null,
-        polls: {}
-      };
+      return createDefaultData();
     }
 
-    return JSON.parse(
-      fs.readFileSync(DATA_FILE, "utf8")
-    );
+    const raw = fs.readFileSync(DATA_FILE, "utf8");
+
+    if (!raw.trim()) {
+      return createDefaultData();
+    }
+
+    const parsed = JSON.parse(raw);
+
+    if (!parsed.polls) {
+      parsed.polls = {};
+    }
+
+    return parsed;
 
   } catch (error) {
     console.error(
@@ -66,35 +113,39 @@ function loadData() {
       error
     );
 
-    return {
-      currentPollMessageId: null,
-      polls: {}
-    };
+    return createDefaultData();
   }
 }
 
 
 function saveData(data) {
-  fs.writeFileSync(
-    DATA_FILE,
-    JSON.stringify(data, null, 2),
-    "utf8"
-  );
+  try {
+    fs.writeFileSync(
+      DATA_FILE,
+      JSON.stringify(data, null, 2),
+      "utf8"
+    );
+
+  } catch (error) {
+    console.error(
+      "Chyba při ukládání data.json:",
+      error
+    );
+  }
 }
 
 
 // =====================================================
-// DATUMY
+// DATUM PŘÍŠTÍHO TÝDNE
 // =====================================================
 
 function getNextWeekDays() {
-
   const today = new Date();
 
-  const day = today.getDay();
+  const currentDay = today.getDay();
 
   const daysUntilNextMonday =
-    ((8 - day) % 7) || 7;
+    ((8 - currentDay) % 7) || 7;
 
   const monday = new Date(today);
 
@@ -102,9 +153,7 @@ function getNextWeekDays() {
     today.getDate() + daysUntilNextMonday
   );
 
-
   return DAYS.map((dayName, index) => {
-
     const date = new Date(monday);
 
     date.setDate(
@@ -112,7 +161,6 @@ function getNextWeekDays() {
     );
 
     return {
-
       name: dayName,
 
       shortName: SHORT_DAYS[index],
@@ -126,9 +174,7 @@ function getNextWeekDays() {
         }
       )
     };
-
   });
-
 }
 
 
@@ -137,13 +183,10 @@ function getNextWeekDays() {
 // =====================================================
 
 function createEmptyAttendance() {
-
   const attendance = {};
 
   DAYS.forEach(day => {
-
     attendance[day] = [];
-
   });
 
   return attendance;
@@ -151,23 +194,14 @@ function createEmptyAttendance() {
 
 
 function normalizeAttendance(attendance) {
-
-  const normalized =
-    createEmptyAttendance();
+  const normalized = createEmptyAttendance();
 
   DAYS.forEach(day => {
-
-    if (
-      Array.isArray(
-        attendance?.[day]
-      )
-    ) {
-
-      normalized[day] =
-        [...new Set(attendance[day])];
-
+    if (Array.isArray(attendance?.[day])) {
+      normalized[day] = [
+        ...new Set(attendance[day])
+      ];
     }
-
   });
 
   return normalized;
@@ -179,75 +213,47 @@ function normalizeAttendance(attendance) {
 // =====================================================
 
 function createEmbed(poll) {
+  poll.attendance = normalizeAttendance(
+    poll.attendance
+  );
 
-  poll.attendance =
-    normalizeAttendance(
-      poll.attendance
-    );
+  const weekStart = poll.days[0].date;
+  const weekEnd = poll.days[4].date;
 
-  const weekStart =
-    poll.days[0].date;
+  const description = poll.days
+    .map(dayInfo => {
+      const people =
+        poll.attendance[dayInfo.name] || [];
 
-  const weekEnd =
-    poll.days[4].date;
+      const list = people.length
+        ? people
+            .map(id => `• <@${id}>`)
+            .join("\n")
+        : "_Nikdo přihlášen_";
 
-
-  const description =
-    poll.days
-      .map(dayInfo => {
-
-        const people =
-          poll.attendance[
-            dayInfo.name
-          ] || [];
-
-        const list =
-          people.length
-
-            ? people
-                .map(
-                  id =>
-                    `• <@${id}>`
-                )
-                .join("\n")
-
-            : "_Nikdo přihlášen_";
-
-
-        return (
-          `**${dayInfo.name} / ` +
-          `${dayInfo.shortName} ` +
-          `${dayInfo.date} ` +
-          `(${people.length}/${CAPACITY})**\n` +
-          `${list}`
-        );
-
-      })
-      .join("\n\n");
-
+      return (
+        `**${dayInfo.name} / ` +
+        `${dayInfo.shortName} ` +
+        `${dayInfo.date} ` +
+        `(${people.length}/${CAPACITY})**\n` +
+        list
+      );
+    })
+    .join("\n\n");
 
   return new EmbedBuilder()
-
     .setTitle(
       poll.locked
-
         ? "Přítomnost v kanceláři OPK – UZAVŘENO"
-
         : "Přítomnost v kanceláři OPK"
     )
-
     .setDescription(
       `**Týden ${weekStart} – ${weekEnd}**\n\n${description}`
     )
-
     .setFooter({
-
       text: poll.locked
-
         ? "Hlasování je uzamčeno. Výsledky zůstávají viditelné."
-
         : "Anketa je otevřená v pátek od 8:00 do 16:00. Kliknutím na den se přihlásíte nebo odhlásíte."
-
     });
 }
 
@@ -257,149 +263,135 @@ function createEmbed(poll) {
 // =====================================================
 
 function createButtons(poll) {
-
-  poll.attendance =
-    normalizeAttendance(
-      poll.attendance
-    );
-
-  const row =
-    new ActionRowBuilder();
-
-
-  poll.days.forEach(
-    dayInfo => {
-
-      const people =
-        poll.attendance[
-          dayInfo.name
-        ] || [];
-
-      const isFull =
-        people.length >= CAPACITY;
-
-
-      row.addComponents(
-
-        new ButtonBuilder()
-
-          .setCustomId(
-            `day_${dayInfo.name}`
-          )
-
-          .setLabel(
-            `${dayInfo.shortName} ` +
-            `${dayInfo.date} ` +
-            `(${people.length}/${CAPACITY})`
-          )
-
-          .setStyle(
-            ButtonStyle.Primary
-          )
-
-          .setDisabled(
-            poll.locked ||
-            isFull
-          )
-
-      );
-
-    }
+  poll.attendance = normalizeAttendance(
+    poll.attendance
   );
 
+  const row = new ActionRowBuilder();
+
+  poll.days.forEach(dayInfo => {
+    const people =
+      poll.attendance[dayInfo.name] || [];
+
+    const isFull =
+      people.length >= CAPACITY;
+
+    row.addComponents(
+      new ButtonBuilder()
+        .setCustomId(
+          `day_${dayInfo.name}`
+        )
+        .setLabel(
+          `${dayInfo.shortName} ` +
+          `${dayInfo.date} ` +
+          `(${people.length}/${CAPACITY})`
+        )
+        .setStyle(
+          ButtonStyle.Primary
+        )
+        .setDisabled(
+          poll.locked || isFull
+        )
+    );
+  });
 
   return [row];
 }
 
 
 // =====================================================
-// POČKÁNÍ NA DISCORD
+// ČEKÁNÍ NA DISCORD
 // =====================================================
 
-async function waitForDiscord() {
-
+async function waitForDiscord(
+  timeoutSeconds = 90
+) {
   if (client.isReady()) {
     return true;
   }
 
   console.log(
-    "Čekám na připojení k Discordu..."
+    "Discord zatím není připraven. Čekám..."
   );
-
 
   for (
     let i = 0;
-    i < 60;
+    i < timeoutSeconds;
     i++
   ) {
-
     if (client.isReady()) {
-
       console.log(
-        "Discord je připraven."
+        "Discord je nyní připraven."
       );
 
       return true;
     }
 
-    await new Promise(
-      resolve =>
-        setTimeout(
-          resolve,
-          1000
-        )
+    await new Promise(resolve =>
+      setTimeout(resolve, 1000)
     );
   }
 
+  console.error(
+    `Discord se nepřipojil ani po ${timeoutSeconds} sekundách.`
+  );
 
   return false;
 }
 
 
 // =====================================================
-// NOVÁ ANKETA
+// VYTVOŘENÍ ANKETY
 // =====================================================
 
 async function sendPoll() {
+  console.log(
+    "Spouštím vytvoření nové ankety..."
+  );
 
-  const ready =
-    await waitForDiscord();
+  const ready = await waitForDiscord();
 
   if (!ready) {
-
     throw new Error(
       "Bot není připojen k Discordu."
     );
-
   }
 
-
-  const data =
-    loadData();
-
+  const data = loadData();
 
   const poll = {
-
     locked: false,
-
-    days:
-      getNextWeekDays(),
-
-    attendance:
-      createEmptyAttendance()
-
+    days: getNextWeekDays(),
+    attendance: createEmptyAttendance()
   };
 
+  console.log(
+    `Načítám Discord kanál ${CHANNEL_ID}...`
+  );
 
   const channel =
     await client.channels.fetch(
       CHANNEL_ID
     );
 
+  if (!channel) {
+    throw new Error(
+      "Discord kanál nebyl nalezen."
+    );
+  }
+
+  if (!channel.isTextBased()) {
+    throw new Error(
+      "CHANNEL_ID nepatří textovému kanálu."
+    );
+  }
+
+  console.log(
+    "Kanál nalezen. Odesílám anketu..."
+  );
 
   const message =
     await channel.send({
-
       content:
         `<@&${OPK_ROLE_ID}> 📅 ` +
         `Prosím vyplňte přítomnost v kanceláři na příští týden.`,
@@ -416,25 +408,19 @@ async function sendPoll() {
           OPK_ROLE_ID
         ]
       }
-
     });
-
 
   data.currentPollMessageId =
     message.id;
 
-  data.polls[
-    message.id
-  ] = poll;
-
+  data.polls[message.id] =
+    poll;
 
   saveData(data);
-
 
   console.log(
     `Anketa byla odeslána. Message ID: ${message.id}`
   );
-
 
   return message.id;
 }
@@ -445,31 +431,27 @@ async function sendPoll() {
 // =====================================================
 
 async function lockPoll() {
+  console.log(
+    "Spouštím uzavření ankety..."
+  );
 
-  const ready =
-    await waitForDiscord();
+  const ready = await waitForDiscord();
 
   if (!ready) {
-
     throw new Error(
       "Bot není připojen k Discordu."
     );
-
   }
 
-
-  const data =
-    loadData();
+  const data = loadData();
 
   const messageId =
     data.currentPollMessageId;
-
 
   if (
     !messageId ||
     !data.polls[messageId]
   ) {
-
     console.log(
       "Není uložená žádná aktuální anketa."
     );
@@ -477,56 +459,43 @@ async function lockPoll() {
     return false;
   }
 
-
   const poll =
     data.polls[messageId];
-
 
   poll.attendance =
     normalizeAttendance(
       poll.attendance
     );
 
-
   poll.locked = true;
-
 
   const channel =
     await client.channels.fetch(
       CHANNEL_ID
     );
 
-
   const message =
     await channel.messages.fetch(
       messageId
     );
 
-
   await message.edit({
-
     embeds: [
       createEmbed(poll)
     ],
 
     components:
       createButtons(poll)
-
   });
 
-
-  data.polls[
-    messageId
-  ] = poll;
-
+  data.polls[messageId] =
+    poll;
 
   saveData(data);
-
 
   console.log(
     "Anketa byla uzamčena."
   );
-
 
   return true;
 }
@@ -536,196 +505,199 @@ async function lockPoll() {
 // WEB SERVER
 // =====================================================
 
-app.get(
-  "/",
-  (req, res) => {
-
-    res.status(200).send(
-      "OPK bot běží."
-    );
-
-  }
-);
+app.get("/", (req, res) => {
+  res.status(200).send(
+    client.isReady()
+      ? "OPK bot běží a Discord je připojen."
+      : "OPK web běží, Discord zatím není připojen."
+  );
+});
 
 
 // =====================================================
-// EXTERNÍ ODESLÁNÍ
+// STATUS
+// =====================================================
+
+app.get("/status", (req, res) => {
+  res.json({
+    web: true,
+    discordReady: client.isReady(),
+    discordUser:
+      client.user?.tag || null,
+    channelConfigured:
+      Boolean(CHANNEL_ID),
+    roleConfigured:
+      Boolean(OPK_ROLE_ID),
+    schedulerConfigured:
+      Boolean(SCHEDULER_KEY)
+  });
+});
+
+
+// =====================================================
+// EXTERNÍ ODESLÁNÍ ANKETY
 // =====================================================
 
 app.get(
   "/send-poll",
   async (req, res) => {
-
     try {
-
       if (
         !SCHEDULER_KEY ||
         req.query.key !==
           SCHEDULER_KEY
       ) {
-
         return res
           .status(403)
           .send(
             "Neplatný klíč."
           );
-
       }
-
 
       const messageId =
         await sendPoll();
 
-
-      res.status(200).send(
-        `Anketa byla vytvořena. ID: ${messageId}`
-      );
-
+      return res
+        .status(200)
+        .send(
+          `Anketa byla vytvořena. ID: ${messageId}`
+        );
 
     } catch (error) {
-
       console.error(
-        "Chyba /send-poll:",
-        error
+        "Chyba /send-poll:"
       );
 
+      console.error(error);
 
-      res
+      return res
         .status(500)
         .send(
           "Anketu se nepodařilo vytvořit."
         );
-
     }
-
   }
 );
 
 
 // =====================================================
-// EXTERNÍ UZAVŘENÍ
+// EXTERNÍ UZAVŘENÍ ANKETY
 // =====================================================
 
 app.get(
   "/lock-poll",
   async (req, res) => {
-
     try {
-
       if (
         !SCHEDULER_KEY ||
         req.query.key !==
           SCHEDULER_KEY
       ) {
-
         return res
           .status(403)
           .send(
             "Neplatný klíč."
           );
-
       }
 
-
-      const result =
+      const success =
         await lockPoll();
 
-
-      if (!result) {
-
+      if (!success) {
         return res
           .status(404)
           .send(
             "Nebyla nalezena žádná anketa."
           );
-
       }
 
-
-      res
+      return res
         .status(200)
         .send(
           "Anketa byla uzavřena."
         );
 
-
     } catch (error) {
-
       console.error(
-        "Chyba /lock-poll:",
-        error
+        "Chyba /lock-poll:"
       );
 
+      console.error(error);
 
-      res
+      return res
         .status(500)
         .send(
           "Anketu se nepodařilo uzavřít."
         );
-
     }
-
   }
 );
 
 
 // =====================================================
-// DISCORD START
+// DISCORD READY
 // =====================================================
 
 client.once(
-  "ready",
-  async () => {
-
+  Events.ClientReady,
+  async readyClient => {
     console.log(
-      `Bot je přihlášen jako ${client.user.tag}`
+      "======================================"
     );
 
-
-    await client.application.commands.set([
-
-      {
-
-        name: "anketa",
-
-        description:
-          "Ručně vytvoří novou anketu přítomnosti v kanceláři OPK."
-
-      },
-
-      {
-
-        name: "uzavrit",
-
-        description:
-          "Ručně uzavře poslední vytvořenou anketu OPK."
-
-      }
-
-    ]);
-
-
     console.log(
-      "Příkazy /anketa a /uzavrit byly zaregistrovány."
+      `DISCORD PŘIPOJEN: ${readyClient.user.tag}`
     );
 
+    console.log(
+      `Discord User ID: ${readyClient.user.id}`
+    );
+
+    console.log(
+      "======================================"
+    );
+
+    try {
+      await client.application.commands.set([
+        {
+          name: "anketa",
+          description:
+            "Ručně vytvoří novou anketu přítomnosti v kanceláři OPK."
+        },
+        {
+          name: "uzavrit",
+          description:
+            "Ručně uzavře poslední vytvořenou anketu OPK."
+        }
+      ]);
+
+      console.log(
+        "Příkazy /anketa a /uzavrit byly zaregistrovány."
+      );
+
+    } catch (error) {
+      console.error(
+        "Chyba při registraci příkazů:"
+      );
+
+      console.error(error);
+    }
   }
 );
 
 
 // =====================================================
-// DISCORD INTERAKCE
+// INTERAKCE
 // =====================================================
 
 client.on(
-  "interactionCreate",
+  Events.InteractionCreate,
   async interaction => {
-
     try {
 
-      // ===============================================
-      // /ANKETA
-      // ===============================================
+      // -------------------------------------------------
+      // SLASH PŘÍKAZY
+      // -------------------------------------------------
 
       if (
         interaction.isChatInputCommand()
@@ -735,126 +707,82 @@ client.on(
           interaction.commandName ===
           "anketa"
         ) {
-
           await interaction.reply({
-
             content:
               "Vytvářím novou anketu...",
-
             ephemeral: true
-
           });
-
 
           await sendPoll();
 
-
           await interaction.editReply({
-
             content:
               "Nová anketa byla vytvořena."
-
           });
-
 
           return;
         }
 
-
-        // =============================================
-        // /UZAVRIT
-        // =============================================
 
         if (
           interaction.commandName ===
           "uzavrit"
         ) {
-
           await interaction.reply({
-
             content:
               "Uzavírám aktuální anketu...",
-
             ephemeral: true
-
           });
 
-
-          await lockPoll();
-
+          const result =
+            await lockPoll();
 
           await interaction.editReply({
-
-            content:
-              "Anketa byla uzavřena."
-
+            content: result
+              ? "Anketa byla uzavřena."
+              : "Není žádná aktuální anketa k uzavření."
           });
-
 
           return;
         }
-
       }
 
 
-      // ===============================================
+      // -------------------------------------------------
       // TLAČÍTKA
-      // ===============================================
+      // -------------------------------------------------
 
-      if (
-        !interaction.isButton()
-      ) {
-
+      if (!interaction.isButton()) {
         return;
-
       }
 
-
-      // Discord musí dostat odpověď co nejrychleji
+      // Discord potřebuje rychlé potvrzení
       await interaction.deferUpdate();
 
-
-      const data =
-        loadData();
+      const data = loadData();
 
       const messageId =
         interaction.message.id;
 
+      const poll =
+        data.polls[messageId];
 
-      if (
-        !data.polls[
-          messageId
-        ]
-      ) {
-
+      if (!poll) {
         console.log(
-          `Pro tuto anketu nejsou data. Message ID: ${messageId}`
+          `Pro tuto anketu nejsou uložena data. Message ID: ${messageId}`
         );
 
         return;
       }
-
-
-      const poll =
-        data.polls[
-          messageId
-        ];
-
 
       poll.attendance =
         normalizeAttendance(
           poll.attendance
         );
 
-
-      if (
-        poll.locked
-      ) {
-
+      if (poll.locked) {
         return;
-
       }
-
 
       const day =
         interaction.customId.replace(
@@ -862,155 +790,183 @@ client.on(
           ""
         );
 
-
       const userId =
         interaction.user.id;
 
-
-      if (
-        !DAYS.includes(day)
-      ) {
-
+      if (!DAYS.includes(day)) {
         return;
-
       }
-
 
       const people =
-        poll.attendance[
-          day
-        ] || [];
+        poll.attendance[day] || [];
 
 
-      // ===============================================
-      // ODHLÁŠENÍ
-      // ===============================================
+      // -------------------------------------------------
+      // UŽ JE PŘIHLÁŠEN → ODHLÁSIT JEN Z TOHOTO DNE
+      // -------------------------------------------------
 
       if (
-        people.includes(
-          userId
-        )
+        people.includes(userId)
       ) {
-
-        poll.attendance[
-          day
-        ] =
+        poll.attendance[day] =
           people.filter(
-            id =>
-              id !== userId
+            id => id !== userId
           );
-
       }
 
 
-      // ===============================================
-      // PŘIHLÁŠENÍ
-      // ===============================================
+      // -------------------------------------------------
+      // NENÍ PŘIHLÁŠEN → PŘIHLÁSIT JEN NA TENTO DEN
+      // -------------------------------------------------
 
       else {
-
         if (
           people.length >=
           CAPACITY
         ) {
-
           return;
-
         }
 
-
-        poll.attendance[
-          day
-        ] = [
+        poll.attendance[day] = [
           ...people,
           userId
         ];
-
       }
 
 
-      data.polls[
-        messageId
-      ] = poll;
+      // -------------------------------------------------
+      // ULOŽIT
+      // -------------------------------------------------
 
+      data.polls[messageId] =
+        poll;
 
       saveData(data);
 
 
-      await interaction.message.edit({
+      // -------------------------------------------------
+      // AKTUALIZOVAT DISCORD
+      // -------------------------------------------------
 
+      await interaction.message.edit({
         embeds: [
           createEmbed(poll)
         ],
 
         components:
           createButtons(poll)
-
       });
 
-
     } catch (error) {
-
       console.error(
-        "Chyba při interakci:",
-        error
+        "Chyba při Discord interakci:"
       );
 
+      console.error(error);
     }
-
   }
 );
 
 
 // =====================================================
-// CHYBY
+// DISCORD CHYBY
 // =====================================================
 
 client.on(
-  "error",
+  Events.Error,
   error => {
-
     console.error(
-      "Chyba Discord klienta:",
-      error
+      "Discord Client Error:"
     );
 
+    console.error(error);
+  }
+);
+
+
+// =====================================================
+// DALŠÍ CHYBY
+// =====================================================
+
+process.on(
+  "unhandledRejection",
+  error => {
+    console.error(
+      "UNHANDLED REJECTION:"
+    );
+
+    console.error(error);
   }
 );
 
 
 process.on(
-  "unhandledRejection",
+  "uncaughtException",
   error => {
-
     console.error(
-      "Neošetřená chyba:",
-      error
+      "UNCAUGHT EXCEPTION:"
     );
 
+    console.error(error);
   }
 );
 
 
 // =====================================================
-// SERVER START
+// START WEB SERVERU
 // =====================================================
 
 const PORT =
-  process.env.PORT ||
-  3000;
-
+  process.env.PORT || 3000;
 
 app.listen(
   PORT,
   () => {
-
     console.log(
       `Web server běží na portu ${PORT}.`
     );
-
   }
 );
 
 
-client.login(TOKEN);
+// =====================================================
+// START DISCORDU
+// =====================================================
+
+async function startDiscord() {
+  try {
+    console.log(
+      "Spouštím přihlášení k Discordu..."
+    );
+
+    if (!TOKEN) {
+      throw new Error(
+        "DISCORD_TOKEN není nastaven."
+      );
+    }
+
+    await client.login(TOKEN);
+
+    console.log(
+      "client.login() proběhl úspěšně."
+    );
+
+  } catch (error) {
+    console.error(
+      "======================================"
+    );
+
+    console.error(
+      "CHYBA PŘI PŘIHLÁŠENÍ K DISCORDU:"
+    );
+
+    console.error(error);
+
+    console.error(
+      "======================================"
+    );
+  }
+}
+
+
+startDiscord();
