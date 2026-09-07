@@ -1428,21 +1428,6 @@ if (!TOKEN) {
   console.log(
     "Připojuji Discord bota..."
   );
-
-
-  client.login(TOKEN)
-
-    .catch(error => {
-
-      console.error(
-        "Discord login selhal:",
-        error
-      );
-
-    });
-
-}
-
 async function testDiscordApi() {
   try {
     console.log("TEST Discord API...");
@@ -1459,3 +1444,17 @@ async function testDiscordApi() {
 }
 
 testDiscordApi();
+
+  client.login(TOKEN)
+
+    .catch(error => {
+
+      console.error(
+        "Discord login selhal:",
+        error
+      );
+
+    });
+
+}
+
