@@ -1442,3 +1442,20 @@ if (!TOKEN) {
     });
 
 }
+
+async function testDiscordApi() {
+  try {
+    console.log("TEST Discord API...");
+    const response = await fetch("https://discord.com/api/v10/gateway");
+
+    console.log("STATUS:", response.status);
+    console.log("RETRY-AFTER:", response.headers.get("retry-after"));
+
+    const text = await response.text();
+    console.log("BODY:", text.substring(0, 300));
+  } catch (error) {
+    console.error("TEST Discord API selhal:", error);
+  }
+}
+
+testDiscordApi();
